@@ -147,7 +147,7 @@ void TaskDisplay(void *) {
         u8g2.drawStr(3 + 20, 7 + secOffsetY, u8x8_u8toa(timeinfo.tm_sec, 2));
 
         int millisecond = now % 1000;
-        if (millisecond / 400) {
+        if (millisecond / 400 && !weatheringVisible) {
           u8g2.drawStr(3 + 8, 6, ":");
           u8g2.drawStr(3 + 18, 6, ":");
         }
