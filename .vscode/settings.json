@@ -1,0 +1,19 @@
+{
+  "files.associations": {
+    "cmath": "cpp",
+    "array": "cpp",
+    "deque": "cpp",
+    "string": "cpp",
+    "unordered_map": "cpp",
+    "unordered_set": "cpp",
+    "vector": "cpp",
+    "string_view": "cpp",
+    "initializer_list": "cpp",
+    "*.tcc": "cpp",
+    "memory": "cpp",
+    "random": "cpp",
+    "list": "cpp",
+    "regex": "cpp",
+    "thread": "cpp"
+  }
+}
