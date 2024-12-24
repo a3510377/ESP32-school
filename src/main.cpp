@@ -59,7 +59,9 @@ void setup() {
   // myDFPlayer.pause();
   // myDFPlayer.sleep();
 
+  wifiMulti.addAP("link", "12345678");
   wifiMulti.addAP("computer05", "pmai0000");
+  wifiMulti.addAP("computer-02", "00000000");
 
   xTaskCreate(TaskNTP, "NTPTask", 512 * 3, NULL, 4, NULL);
   xTaskCreate(TaskDisplay, "DisplayTask", 512 * 6, NULL, 6, NULL);
