@@ -29,9 +29,9 @@ struct weather_t {
 
 HTTPClient http;
 WiFiMulti wifiMulti;
-DFRobotDFPlayerMini myDFPlayer;
+SimpleDHT11 dht(4);
 HardwareSerial SerialDF(1);
-SimpleDHT11 dht(26);
+DFRobotDFPlayerMini myDFPlayer;
 U8G2_MAX7219_32X8_F_4W_SW_SPI u8g2(U8G2_R0, /* clock=*/25, /* data=*/32,
                                    /* cs=*/33, /* dc=*/U8X8_PIN_NONE,
                                    /* reset=*/U8X8_PIN_NONE);
@@ -39,7 +39,6 @@ U8G2_MAX7219_32X8_F_4W_SW_SPI u8g2(U8G2_R0, /* clock=*/25, /* data=*/32,
 void TaskNTP(void *);
 void TaskDisplay(void *);
 void TaskWeather(void *);
-void TaskDHT(void *);
 
 xSemaphoreHandle xDataMutex = NULL;
 
@@ -54,11 +53,6 @@ void setup() {
     while (1);
   }
 
-  delay(1000);
-  pinMode(34, INPUT);
-  myDFPlayer.begin(SerialDF, false);
-  delay(500);
-
   // myDFPlayer.volume(25);
   // myDFPlayer.start();
   // myDFPlayer.playMp3FolderSync(1, 30 * 1e3);
@@ -68,12 +62,49 @@ void setup() {
   wifiMulti.addAP("computer05", "pmai0000");
 
   xTaskCreate(TaskNTP, "NTPTask", 512 * 3, NULL, 4, NULL);
-  xTaskCreate(TaskDisplay, "DisplayTask", 512 * 6, NULL, 4, NULL);
+  xTaskCreate(TaskDisplay, "DisplayTask", 512 * 6, NULL, 6, NULL);
   xTaskCreate(TaskWeather, "WeatherTask", 512 * 6, NULL, 4, NULL);
-  xTaskCreate(TaskDHT, "DHTTask", 512 * 3, NULL, 4, NULL);
+  // delay(1000);
+  // pinMode(34, INPUT);
+  // myDFPlayer.begin(SerialDF, false);
+  // delay(500);
 }
 
-void loop() {}
+void loop() {
+  for (uint8_t i = 0; i < 3; i++) {
+    if (xSemaphoreTake(xDataMutex, 0) == pdTRUE) {
+      byte temperature = 0, humidity = 0;
+      int err;
+      if ((err = dht.read(&temperature, &humidity, NULL)) ==
+          SimpleDHTErrSuccess) {
+        weather.with_local = true;
+
+        weather.local_hum = (int)humidity;
+        weather.local_temp = (int)temperature;
+
+        Serial.print("Temperature = ");
+        Serial.print(weather.local_temp);
+        Serial.print(" °C\t");
+        Serial.print("Humidity = ");
+        Serial.print(weather.local_hum);
+        Serial.println(" %");
+
+        xSemaphoreGive(xDataMutex);
+        break;
+      } else {
+        weather.with_local = false;
+
+        Serial.print("Read DHT11 failed, err=");
+        Serial.print(SimpleDHTErrCode(err));
+        Serial.print(",");
+        Serial.println(SimpleDHTErrDuration(err));
+      }
+      xSemaphoreGive(xDataMutex);
+    }
+    vTaskDelay(100);
+  }
+  vTaskDelay(1000 * 10);
+}
 
 void TaskDisplay(void *) {
   Serial.println("TaskDisplay Start");
@@ -85,8 +116,12 @@ void TaskDisplay(void *) {
                 weatheringScrollEndMillis = 0;
   ScrollDirection weatherIconDirection = DOWN, lastWeatherIconDirection = NONE;
 
+  u8g2.setFont(SF0);
+  u8g2.drawStr(0, 7, "loading...");
+  u8g2.sendBuffer();
+  while (WiFi.status() != WL_CONNECTED);
+
   while (1) {
-    vTaskDelay(1);
     if (xSemaphoreTake(xDataMutex, 0) == pdTRUE) {
       struct tm timeinfo;
       if (getLocalTime(&timeinfo)) {
@@ -98,13 +133,12 @@ void TaskDisplay(void *) {
 
           u8g2.setFont(SF0);
           if (!weather.with_local) {
-            u8g2.drawStr(3 + 12, -7 - 3 + minOffsetY, "-");
-            u8g2.drawStr(3 + 22, -7 - 3 + secOffsetY, "-");
+            u8g2.drawStr(3 + 12, -10 + minOffsetY, "-");
+            u8g2.drawStr(3 + 22, -10 + secOffsetY, "-");
           } else {
-            Serial.println(minOffsetY);
-            u8g2.drawStr(3 + 10, -7 + minOffsetY,
+            u8g2.drawStr(3 + 10, -9 + minOffsetY,
                          u8x8_u8toa(weather.local_temp, 2));
-            u8g2.drawStr(3 + 20, -7 + secOffsetY,
+            u8g2.drawStr(3 + 20, -9 + secOffsetY,
                          u8x8_u8toa(weather.local_hum, 2));
           }
 
@@ -147,9 +181,9 @@ void TaskDisplay(void *) {
         u8g2.drawStr(3 + 20, 7 + secOffsetY, u8x8_u8toa(timeinfo.tm_sec, 2));
 
         int millisecond = now % 1000;
-        if (millisecond / 400 && !weatheringVisible) {
-          u8g2.drawStr(3 + 8, 6, ":");
-          u8g2.drawStr(3 + 18, 6, ":");
+        if (millisecond / 400) {
+          u8g2.drawStr(3 + 8, 6 + minOffsetY, ":");
+          u8g2.drawStr(3 + 18, 6 + secOffsetY, ":");
         }
 
         if (weather.condition != WeatherCondition::UNKNOWN &&
@@ -166,6 +200,7 @@ void TaskDisplay(void *) {
 
       xSemaphoreGive(xDataMutex);
     }
+    vTaskDelay(5);
   }
 }
 
@@ -244,38 +279,5 @@ void TaskWeather(void *) {
     http.end();
 
     vTaskDelay(1000 * 60 * 30);  // 30min
-  }
-}
-
-void TaskDHT(void *) {
-  Serial.println("TaskDHT Start");
-  while (1) {
-    if (xSemaphoreTake(xDataMutex, 0) == pdTRUE) {
-      float temperature = 0, humidity = 0;
-      int err;
-      if ((err = dht.read2(&temperature, &humidity, NULL)) ==
-          SimpleDHTErrSuccess) {
-        weather.with_local = true;
-
-        weather.local_hum = humidity;
-        weather.local_temp = temperature;
-
-        Serial.print("Temperature = ");
-        Serial.print(temperature);
-        Serial.print(" °C\t");
-        Serial.print("Humidity = ");
-        Serial.print(humidity);
-        Serial.println(" %");
-      } else {
-        Serial.print("Read DHT11 failed, err=");
-        Serial.print(SimpleDHTErrCode(err));
-        Serial.print(",");
-        Serial.println(SimpleDHTErrDuration(err));
-
-        weather.with_local = false;
-      }
-      xSemaphoreGive(xDataMutex);
-    }
-    vTaskDelay(1000);
   }
 }
