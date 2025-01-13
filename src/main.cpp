@@ -1,4 +1,8 @@
 // DFRobotDFPlayerMini函式庫下載：https://github.com/DFRobot/DFRobotDFPlayerMini
+/* asr-pro:
+  ESP32  --- asr-pro
+  17(TX) <-> A3(RX)
+  16(RX) <-> A2(TX) */
 
 #include <Arduino.h>
 #include <DFRobotDFPlayerMini.h>
@@ -30,8 +34,6 @@ struct weather_t {
 HTTPClient http;
 WiFiMulti wifiMulti;
 SimpleDHT11 dht(4);
-HardwareSerial SerialDF(1);
-DFRobotDFPlayerMini myDFPlayer;
 U8G2_MAX7219_32X8_F_4W_SW_SPI u8g2(U8G2_R0, /* clock=*/25, /* data=*/32,
                                    /* cs=*/33, /* dc=*/U8X8_PIN_NONE,
                                    /* reset=*/U8X8_PIN_NONE);
@@ -39,18 +41,24 @@ U8G2_MAX7219_32X8_F_4W_SW_SPI u8g2(U8G2_R0, /* clock=*/25, /* data=*/32,
 void TaskNTP(void *);
 void TaskDisplay(void *);
 void TaskWeather(void *);
+void TaskSerail1(void *);
+
+uint8_t weatherConditionToStatus(WeatherCondition condition);
 
 xSemaphoreHandle xDataMutex = NULL;
 
 void setup() {
   Serial.begin(115200);
-  SerialDF.begin(9600, SERIAL_8N1, 12, 13);
+  Serial2.begin(115200, SERIAL_8N1, 16, 17);
   WiFi.begin();
+  // WiFi.beginSmartConfig(SC_TYPE_ESPTOUCH_V2, "");
 
-  xDataMutex = xSemaphoreCreateMutex();
-  if (xDataMutex == NULL) {
-    Serial.println("xDataMutex is NULL");
-    while (1);
+  while (1) {
+    xDataMutex = xSemaphoreCreateMutex();
+    if (!xDataMutex) {
+      Serial.println("xDataMutex create failed");
+      vTaskDelay(1000);
+    } else break;
   }
 
   // myDFPlayer.volume(25);
@@ -66,6 +74,7 @@ void setup() {
   xTaskCreate(TaskNTP, "NTPTask", 512 * 3, NULL, 4, NULL);
   xTaskCreate(TaskDisplay, "DisplayTask", 512 * 6, NULL, 6, NULL);
   xTaskCreate(TaskWeather, "WeatherTask", 512 * 6, NULL, 4, NULL);
+  xTaskCreate(TaskSerail1, "Serail1Task", 512 * 6, NULL, 4, NULL);
   // delay(1000);
   // pinMode(34, INPUT);
   // myDFPlayer.begin(SerialDF, false);
@@ -73,6 +82,8 @@ void setup() {
 }
 
 void loop() {
+  wifiMulti.run();
+
   for (uint8_t i = 0; i < 3; i++) {
     if (xSemaphoreTake(xDataMutex, 0) == pdTRUE) {
       byte temperature = 0, humidity = 0;
@@ -105,7 +116,8 @@ void loop() {
     }
     vTaskDelay(100);
   }
-  vTaskDelay(1000 * 10);
+
+  vTaskDelay(1000 * 5);
 }
 
 void TaskDisplay(void *) {
@@ -121,7 +133,7 @@ void TaskDisplay(void *) {
   u8g2.setFont(SF0);
   u8g2.drawStr(0, 7, "loading...");
   u8g2.sendBuffer();
-  while (WiFi.status() != WL_CONNECTED);
+  while (WiFi.status() != WL_CONNECTED) vTaskDelay(1);
 
   while (1) {
     if (xSemaphoreTake(xDataMutex, 0) == pdTRUE) {
@@ -282,4 +294,56 @@ void TaskWeather(void *) {
 
     vTaskDelay(1000 * 60 * 30);  // 30min
   }
+}
+
+void TaskSerail1(void *) {
+  Serial.println("TaskSerail Start");
+  while (1) {
+    if (Serial2.available() && xSemaphoreTake(xDataMutex, 0) == pdTRUE) {
+      String s = Serial2.readStringUntil('\n');
+      s.trim();
+
+      Serial.print("ASRPro: ");
+      Serial.println(s);
+
+      int colonIndex = s.indexOf(":");
+      if (colonIndex == -1) goto end;
+
+      {
+        String key = s.substring(0, colonIndex);
+        String value = s.substring(colonIndex + 1);
+
+        if (key != "CMD") goto end;
+
+        if (value == "TMP" && weather.with_local) {
+          Serial2.print("TMP:");
+          Serial2.println(weather.local_temp);
+        } else if (value == "HUM" && weather.with_local) {
+          Serial2.print("HUM:");
+          Serial2.println(weather.local_hum);
+        } else if (value == "WAT" &&
+                   weather.condition != WeatherCondition::UNKNOWN) {
+          Serial2.print("WAT:");
+          Serial2.println(weatherConditionToStatus(weather.condition));
+        }
+      }
+
+    end:
+      xSemaphoreGive(xDataMutex);
+    }
+    vTaskDelay(1);
+  }
+}
+
+uint8_t weatherConditionToStatus(WeatherCondition condition) {
+  switch (condition) {
+    case SUM:
+      return 0;
+    case RAIN:
+      return 1;
+    case CLOUDY:
+      return 2;
+  }
+
+  return 0;
 }
